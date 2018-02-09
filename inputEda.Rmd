@@ -6,6 +6,8 @@ output: rmarkdown::github_document
 ```{r}
 library(tidyverse)
 library(readxl)
+library(VIM)
+
 
 energy <- read_excel("./Data/ProblemCData.xlsx")
 codes <- read_excel("./Data/ProblemCData.xlsx", sheet = 2)
@@ -24,12 +26,74 @@ energySpread <- energy %>%
 
 energySpread[,1:3]
 
+## None are all empty
+apply(energySpread, 2, function(x){all(is.na(x))})
+
+energySpread[,is.na(energySpread)]
+
 energySpread %>% 
   select(TETCB, StateCode)
 
+sum(is.na(energySpread)[1,])
+colnames(energySpread[,is.na(energySpread)[1,]])
+colnames(energis.na(energySpread))
+
+matrixplot(energySpread[,is.na(energySpread)[1,]])
+matrixplot(energySpread[,!is.na(energySpread)[1,]])
+matrixplot(energySpread[,c("TEACB", "TECCB", "TEICB", "TERCB")])
+
+energySpread[1:10,]
+energyList <- split(energySpread[,-1], f = energySpread$StateCode)
+str(energyList)
+
+summary(energyList$TX$TETCB)
+summary(energyList$AZ$TETCB)
+summary(energyList$CA$TETCB)
+summary(energyList$NM$TETCB)
+
+plot(energyList$TX$TETPB, ylim = c(0, 700), type="l")
+lines(energyList$AZ$TETPB, type="l")
+lines(energyList$CA$TETPB, type="l")
+lines(energyList$NM$TETPB, type="l")
+
+energyList[["AZ"]]
+```
+
+Need to decide what to do with missing values
+Maybe only focus on consumption for now...?
+Stacked area/bar chart 
+
+```{r}
 length(codes$Description)
 length(unique(codes$Description)) # Can cut from 605 to 480 by eliminating duplicate
 
-duplicated()
+#codes$Unit[]
+
+codes <- codes[codes$MSN %in% colnames(energySpread),]
+
+unique(codes$Unit)
+
+sum(duplicated(as.list(energySpread)))
+
+sum(duplicated(codesOrdered$Description))
+
+codesOrdered <- codes[order(codes$Unit),]
+codesOrdered[duplicated(codesOrdered$Description),]
+codesOrdered[seq(dim(codesOrdered)[1], 1),][duplicated(rev(codesOrdered$Description)),]
+
+codesCleaned <- codes[-duplicated(codesOrdered$Description),] #Might want to check if duplicated units have 0 in one and value in other
+energySpread[,codesCleaned$MSN] # Some codes not in energy dataset
+
+codes$Unit[which(duplicated(codes$Description))]
+
+  
+codes$Unit[-which(duplicated(codes$Description))]
+
+str_detect(codes$Unit, "dollars")
+str_detect(codes$Unit, "Btu")
+
+cbind(rowSums(energySpread[,c("TEACB", "TECCB", "TEICB", "TERCB")]), energySpread[,c("TETCB")])
+
+codes
 ```
 

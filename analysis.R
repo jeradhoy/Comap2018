@@ -5,30 +5,6 @@ library("tidyverse")
 energy_tidy <- spread(energy, key=MSN, value=data)
 energyList <- split(energy_tidy[,-1], f=energy_tidy$state)
 
-library(forecast)
-AZ.ts <- ts(energyList$AZ$RETCB, start=1960, end=2009, 1)
-AZ.Arima <- auto.arima(AZ.ts)
-plot(forecast(AZ.Arima, h=41))
-accuracy(AZ.Arima)
-forecast(AZ.Arima, h=41)
-
-CA.ts <- ts(energyList$CA$RETCB, start=1960, end=2009, 1)
-CA.Arima <- auto.arima(CA.ts)
-plot(forecast(CA.Arima, h=41))
-accuracy(CA.Arima)
-forecast(CA.Arima, h=41)
-
-NM.ts <- ts(energyList$NM$RETCB, start=1960, end=2009, 1)
-NM.Arima <- auto.arima(NM.ts)
-plot(forecast(NM.Arima, h=41))
-accuracy(NM.Arima)
-forecast(NM.Arima, h=41)
-
-TX.ts <- ts(energyList$TX$RETCB, start=1960, end=2009, 1)
-TX.Arima <- auto.arima(TX.ts)
-plot(forecast(TX.Arima, h=41))
-accuracy(TX.Arima)
-forecast(TX.Arima, h=41)
 
 library(mgcv)
 

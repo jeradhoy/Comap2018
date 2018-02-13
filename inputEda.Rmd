@@ -1,135 +1,549 @@
 ---
-title: "EDA"
-output: rmarkdown::github_document
+title: "Comap 2018 Problem C Code"
+output: md_document
 ---
+
+```{r include=F}
+knitr::opts_chunk$set()
+```
+
 ```{r}
 library(tidyverse)
 library(readxl)
+library(reshape2) # for melt function
+library(mgcv)
+library(forecast)
+source("http://www.math.montana.edu/courses/s217/documents/derivFun.R.txt")
 
-codes <- read_excel("./Data/ProblemCData.xlsx", sheet = 2)
 energy <- read_excel("./Data/ProblemCData.xlsx", sheet = 1)
+codes <- read_excel("./Data/ProblemCData.xlsx", sheet = 2)
 
 # Convert to table with each MSN value as column name
 energySpread <- energy %>%
   spread(MSN, Data)
 
-energyList <- split(energySpread[,-1], f = energySpread$StateCode)
+codesCleaned <- codes %>% 
+  arrange(Unit) %>%
+  filter(MSN %in% colnames(energySpread)) %>%
+  filter(!duplicated(Description)) %>% 
+  filter(!str_detect(tolower(Description), "factor"))
+
+energyCleaned <- energySpread %>% 
+  select(one_of(c("StateCode", "Year"), codesCleaned$MSN))
+
+# Remove negative import values (only care about imports, not exports)
+energyCleaned$ELNIB[energyCleaned$ELNIB < 0] <- 0
+energyCleaned$ELISB[energyCleaned$ELISB < 0] <- 0
+
+# Combine imports and exports
+energyCleaned$EL_comB <- energyCleaned$ELNIB + energyCleaned$ELISB
+
+# Get variables with value in Billions
+bill_vars <- energyCleaned %>% 
+  colnames() %>% 
+  str_detect(".B")
+
+# Convert billion variables to trillion
+energyCleaned[,bill_vars] <- energyCleaned[, bill_vars] / 1000
+
+# Combining EMLCB (fuel ethanol loss) and EMTCB (Fuel Ethanol)
+energyCleaned$EM_comB <- energyCleaned$EMLCB + energyCleaned$EMTCB
+
+
+energyList <- split(energyCleaned[,-1], f = energyCleaned$StateCode)
+
+```
+```{r}
+TETCB_vars <- c("CLTCB", "NNTCB" , "PMTCB", "NUETB", "RETCB", "EL_comB")
+#               Eth/Loss  GeoTherm  Hydro    Solar    Wood     Wind
+RETCB_Vars <- c("EM_comB", "GETCB", "HYTCB", "SOTCB", "WWTCB", "WYTCB")
+
+sector_total_vars <- c("TEACB", "TEICB", "TECCB", "TERCB")
+
+code_titles <- list(
+  "CLTCB" = "Coal",
+  "NNTCB" = "Natural Gas",
+  "PMTCB" = "Petroleum",
+  "NUETB" = "Nuclear",
+  "RETCB" = "Renewables",
+  "EM_comB" = "Ethanol Fuel", 
+  "EL_comB" = "Imported", 
+  "GETCB" = "Geothermal", 
+  "HYTCB" = "Hydroelectric", 
+  "SOTCB" = "Solar", 
+  "WWTCB" = "Wood & Waste", 
+  "WYTCB" = "Wind",
+  "EL_comB" = "Imported",
+  "AZ" = "Arizona",
+  "NM" = "New Mexico",
+  "CA" = "California",
+  "TX" = "Texas"
+)
+
+tot_labs <- c("CLTCB" = "Coal",
+"EL_comB" = "Imported",
+"NNTCB" = "Natural Gas",
+"NUETB" = "Nuclear",
+"PMTCB" = "Petroleum",
+"RETCB" = "Renewables")
+
+labeller_func <- function(variable,value, label_list = code_titles){
+  return(label_list[value])
+}
+```
+
+
+```{r}
+# Table for profile of consumption by source for each state
+energyCleaned %>% 
+  subset(Year == 2009) %>% 
+  select(one_of(c("StateCode", TETCB_vars))) %>% 
+  t()
+
+meow <- energyCleaned %>% 
+  subset(Year == 2009) %>% 
+  select(one_of(c("StateCode", TETCB_vars, "TPOPP")))
+
+meow[, TETCB_vars] <- meow[, TETCB_vars] / meow$TPOPP * 1000
+t(meow)
+
+energyCleaned %>% 
+  subset(Year == 2009) %>% 
+  select(one_of(c("StateCode", sector_total_vars))) %>% 
+  t()
+```
+
+
+```{r}
+# Stacked bar chart of state energy sources
+cols <- c("#4D4D4D", "peru", "#A8272B", "#88C7E9","#8FAD49", "#0968A6")
+energyCleaned %>% 
+  subset(Year == 2009) %>% 
+  select(one_of(c("StateCode", TETCB_vars))) %>% 
+  melt(id.var="StateCode") %>% 
+  ggplot(aes(x = StateCode, y = value, fill = variable)) +
+    geom_bar(stat = "identity") +
+    ylab("Energy Use (Trillion BTUs)") +
+    ggtitle("2009 Total Energy Consumption by Source") + 
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_fill_manual("Energy Source", labels = c("Coal", "Natural Gas", "Petroleum",
+                                   "Nuclear", "Renewables", "Imported Electricity"),
+                      values = cols)
+```
+
+
+```{r}
+# Stacked bar chart of per capita state energy sources
+cols <- c("#4D4D4D", "peru", "#A8272B", "#88C7E9","#8FAD49", "#0968A6")
+energyCleaned %>% 
+  subset(Year == 2009) %>% 
+  select(one_of(c("StateCode", TETCB_vars, "TPOPP"))) %>% 
+  melt(id.var=c("StateCode", "TPOPP")) %>% 
+  mutate(value_pop = value / TPOPP) %>% 
+  ggplot(aes(x = StateCode, y = value_pop, fill = variable)) +
+    geom_bar(stat = "identity") +
+    ylab("Per Capita Energy Use (Trillion BTUs)") +
+    ggtitle("2009 Total Per Capita Energy Consumption by Source") + 
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_fill_manual("Energy Source", labels = c("Coal", "Natural Gas", "Petroleum",
+                                   "Nuclear", "Renewables", "Imported Electricity"),
+                      values = cols)
+
+```
+
+
+```{r}
+# Stacked bar chart of state energy sources
+cols <- c("#8FAD49", "#A8272B", "#0968A6", "#FFC83F", "peru", "#88C7E9")
+RETCB_Vars
+energyCleaned %>% 
+  subset(Year == 2009) %>% 
+  select(one_of(c("StateCode", RETCB_Vars))) %>% 
+  melt(id.var="StateCode") %>% 
+  ggplot(aes(x = StateCode, y = value, fill = variable)) +
+    geom_bar(stat = "identity") +
+    ylab("Energy Use (Trillion BTUs)") +
+    ggtitle("2009 Renewable Energy Consumption by Source") + 
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_fill_manual("Energy Source", labels = c("Fuel Ethanol", "Geothermal",
+                      "Hydroelectric", "Solar", "Wood and Waste", "Wind"),
+                      values = cols)
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+# Stacked bar chart of per capita state sources
+cols <- c("Peru", "#A8272B", "#8FAD49", "#0968A6")
+energyCleaned %>% 
+  subset(Year == 2009) %>% 
+  select(one_of(c("StateCode", sector_total_vars))) %>% 
+  melt(id.var=c("StateCode")) %>% 
+  ggplot(aes(x = StateCode, y = value, fill = variable)) +
+    geom_bar(stat = "identity") +
+    ylab("Trillion Btu") +
+    xlab("State") +
+    ggtitle("2009 Energy Consuption by Economic Sector") + 
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_fill_manual("Economic Sector", labels = c("Transportation", "Industrial",
+                                      "Commercial", "Residential"),
+                      values = cols)
+
 ```
 
 ```{r}
-library(TSA)
-
-periodogram(energyList$CA$RETCB)
-?periodogram
-
+# Line plot of total renewable time series by state
+cols <- c("peru", "#A8272B", "#8FAD49", "#0968A6")
+energyCleaned %>% 
+  select(one_of(c("StateCode", "Year", "RETCB", "TPOPP"))) %>% 
+  ggplot(aes(x = Year, y = RETCB, group = StateCode, color=StateCode)) +
+    geom_line() +
+    ylab("Renewables Use (Trillion BTUs)") +
+    xlab("Year") +
+    ggtitle("State Renewables Consumption") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_color_manual("State", labels = c("Arizona", "California", "New Mexico", "Texas"),
+                      values = cols) 
 ```
 
 ```{r}
-codesOrdered <- codes[order(codes$Unit),]
-codesCleaned <- codesOrdered[-duplicated(codesOrdered$Description),] #Might want to check if duplicated units have 0 in one and value in other
-str_detect(codesCleaned$Description, "Factor")
-
-unique(codesCleaned$Unit)
-
-
-codesCleaned$Description[str_detect(codesCleaned$Description, "total consum")]
+# Line plot of total Renewables time series by state
+cols <- c("peru", "#A8272B", "#8FAD49", "#0968A6")
+energyCleaned %>% 
+  select(one_of(c("StateCode", "Year", "RETCB", "TPOPP"))) %>% 
+  ggplot(aes(x = Year, y = RETCB, group = StateCode, color=StateCode)) +
+    geom_line() +
+    ylab("Renewables Use (Trillion BTUs)") +
+    xlab("Year") +
+    ggtitle("State Renewables Consumption") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_color_manual("State", labels = c("Arizona", "California", "New Mexico", "Texas"),
+                      values = cols) 
 ```
 
-
-
 ```{r}
-library(tidyverse)
-library(readxl)
-
-str(energyList)
-str(energyList)
-
-energy
-codes
-
-str(energy)
-str(codes)
-
-unique(energy$MSN)
-
-
-energySpread[,1:3]
-
-## None are all empty
-apply(energySpread, 2, function(x){all(is.na(x))})
-
-energySpread[,is.na(energySpread)]
-
-energySpread %>% 
-  select(TETCB, StateCode)
-
-sum(is.na(energySpread)[1,])
-colnames(energySpread[,is.na(energySpread)[1,]])
-colnames(energis.na(energySpread))
-
-matrixplot(energySpread[,is.na(energySpread)[1,]])
-matrixplot(energySpread[,!is.na(energySpread)[1,]])
-matrixplot(energySpread[,c("TEACB", "TECCB", "TEICB", "TERCB")])
-
-energySpread[1:10,]
-
-summary(energyList$TX$TETCB)
-summary(energyList$AZ$TETCB)
-summary(energyList$CA$TETCB)
-summary(energyList$NM$TETCB)
-
-plot(energyList$TX$TETPB, ylim = c(0, 700), type="l")
-lines(energyList$AZ$TETPB, type="l")
-lines(energyList$CA$TETPB, type="l")
-lines(energyList$NM$TETPB, type="l")
-
-energyList[["AZ"]]
-```
-```{r}
-
+# Line plot of electricity price over time
+cols <- c("peru", "#A8272B", "#8FAD49", "#0968A6")
+energyCleaned %>% 
+  select(one_of(c("StateCode", "Year", "TETCD"))) %>% 
+  ggplot(aes(x = Year, y = TETCD, group = StateCode, color=StateCode)) +
+    geom_line() +
+    ylab("Dollars per Million BTU") +
+    xlab("Year") +
+    ggtitle("Average Price of Energy by State") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_color_manual("State", labels = c("Arizona", "California", "New Mexico", "Texas"),
+                      values = cols) 
 ```
 
-Need to decide what to do with missing values
-Maybe only focus on consumption for now...?
-Stacked area/bar chart 
+```{r}
+# Line plot of energy sources for each state
+cols <- c("#4D4D4D", "peru", "#A8272B", "#88C7E9","#8FAD49", "#0968A6")
+energyCleaned %>% 
+  select(one_of(c("StateCode", "Year", TETCB_vars))) %>%
+  melt(id.var=c("StateCode", "Year")) %>% 
+  ggplot(aes(x = Year, y = value, group = variable, color = variable)) +
+    facet_grid(StateCode ~ ., scales = "free") +
+    geom_line() +
+    ylab("Energy Use (Trillion BTUs)") +
+    xlab("Year") +
+    ggtitle("State Energy Consumption by Source") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_color_manual("Energy Source", labels = c("Coal", "Natural Gas", "Petroleum",
+                                   "Nuclear", "Renewables", "Imported Electricity"),
+                      values = cols)
+```
 
 ```{r}
-length(codes$Description)
-length(unique(codes$Description)) # Can cut from 605 to 480 by eliminating duplicate
+# Line plot of Renewables sources for each state
+cols <- c("#4D4D4D", "peru", "#A8272B", "#88C7E9","#8FAD49", "#0968A6")
+energyCleaned %>% 
+  select(one_of(c("StateCode", "Year", RETCB_Vars))) %>%
+  melt(id.var=c("StateCode", "Year")) %>% 
+  #mutate(RETCB_POP = RETCB / TPOPP) %>% 
+  ggplot(aes(x = Year, y = value, group = variable, color = variable)) +
+    facet_grid(StateCode ~ ., scales = "free") +
+    geom_line() +
+    ylab("Energy Use (Trillion BTUs)") +
+    xlab("Year") +
+    ggtitle("State Renewables Consumption by Source") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_color_manual("Energy Source", labels = c("Fuel Ethanol", "Geothermal", "Hydroelectric",
+                                   "Solar", "Wood and Waste", "Wind"),
+                      values = cols)
+```
 
-#codes$Unit[]
+```{r}
+state_renew_gams <- lapply(names(energyList), function(state){
+  d <- Deriv(gam(RETCB ~ s(Year, bs="ts"), data=energyList[[state]]), n = 200)
+  data.frame(state, d[[1]]$deriv, d[[1]]$se.deriv, d$eval)
+}) %>% 
+  bind_rows() %>% 
+  `colnames<-` (c("StateCode", "Deriv", "se", "Year"))
 
-codes <- codes[codes$MSN %in% colnames(energySpread),]
-
-unique(codes$Unit)
-
-sum(duplicated(as.list(energySpread)))
-
-sum(duplicated(codesOrdered$Description))
-
-codesOrdered <- codes[order(codes$Unit),]
-codesOrdered[duplicated(codesOrdered$Description),]
-codesOrdered[seq(dim(codesOrdered)[1], 1),][duplicated(rev(codesOrdered$Description)),]
-
-codesCleaned <- codes[-duplicated(codesOrdered$Description),] #Might want to check if duplicated units have 0 in one and value in other
-energySpread[,codesCleaned$MSN] # Some codes not in energy dataset
-
-codes$Unit[which(duplicated(codes$Description))]
-
+state_renew_gams %>%
+  mutate(Deriv_col = ifelse(Deriv - 2*se > 0, "pos", NA)) %>% 
+  mutate(Deriv_col = ifelse(Deriv + 2*se < 0, "neg", Deriv_col)) %>% 
   
-codes$Unit[-which(duplicated(codes$Description))]
-
-str_detect(codes$Unit, "dollars")
-str_detect(codes$Unit, "Btu")
-
-cbind(rowSums(energySpread[,c("TEACB", "TECCB", "TEICB", "TERCB")]), energySpread[,c("TETCB")])
-
-codes
+  ggplot(aes(x = Year, y = Deriv)) +
+    facet_grid(StateCode ~ ., scales = "free", labeller = labeller_func) +
+    geom_ribbon(aes(ymin = Deriv - 2*se, ymax = Deriv + 2*se), fill="grey70", alpha = 0.70) +
+    geom_line(aes(group=1, color=Deriv_col)) +
+    geom_hline(yintercept = 0, size = 0.25, alpha = 0.5) +
+    theme_bw() +
+    ggtitle("Derivate of Time Trend for Total Renewables") +
+    ylab("Derivative of Time Trend of Renewables Use (Trillion BTUs)") +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank()) +
+    scale_color_discrete("Trend", labels = c("Negative", "Positive", "None"))
 ```
-
-## Energy profile
 
 ```{r}
-energySpread$ 
+state_tot_gams <- lapply(TETCB_vars, function(tot_var){
+  
+  lapply(names(energyList), function(state){
+    
+    d <- Deriv(gam(formula(paste(tot_var, " ~ s(Year, bs='ts')")), data=energyList[[state]]), n = 200)
+    data.frame(state, tot_var, d[[1]]$deriv, d[[1]]$se.deriv, d$eval)
+    
+  }) %>% 
+  bind_rows() %>% 
+  `colnames<-` (c("StateCode", "Var", "Deriv", "se", "Year"))
+}) %>% 
+  bind_rows()
+
+state_tot_gams %>% 
+  mutate(Deriv_col = ifelse(Deriv - 2*se > 0, "pos", NA)) %>% 
+  mutate(Deriv_col = ifelse(Deriv + 2*se < 0, "neg", Deriv_col)) %>% 
+  
+  ggplot(aes(x = Year, y = Deriv)) +
+    facet_grid(StateCode ~ Var, scales = "free", labeller = labeller_func) +
+    geom_ribbon(aes(ymin = Deriv - 2*se, ymax = Deriv + 2*se), fill="grey70", alpha = 0.70) +
+    geom_line(aes(group=1, color=Deriv_col)) +
+    geom_hline(yintercept = 0, size = 0.25, alpha = 0.5) +
+    ylab("Derivative of Time Trend of Energy Use (Trillion BTUs)") +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_color_discrete("Trend", labels = c("Negative", "Positive", "None"))
 ```
+
+```{r}
+state_tot_gams <- lapply(RETCB_Vars, function(tot_var){
+  
+  lapply(names(energyList), function(state){
+    
+    d <- Deriv(gam(formula(paste(tot_var, " ~ s(Year, bs='ts')")), 
+                   data=energyList[[state]]), n = 200)
+    data.frame(state, tot_var, d[[1]]$deriv, d[[1]]$se.deriv, d$eval)
+    
+  }) %>% 
+  bind_rows() %>% 
+  `colnames<-` (c("StateCode", "Var", "Deriv", "se", "Year"))
+}) %>% 
+  bind_rows()
+
+state_tot_gams %>% 
+  mutate(Deriv_col = ifelse(Deriv - 2*se > 0, "pos", NA)) %>% 
+  mutate(Deriv_col = ifelse(Deriv + 2*se < 0, "neg", Deriv_col)) %>% 
+  
+  ggplot(aes(x = Year, y = Deriv)) +
+    facet_grid(StateCode ~ Var, scales = "free", labeller = labeller_func) +
+    geom_ribbon(aes(ymin = Deriv - 2*se, ymax = Deriv + 2*se), fill="grey70", 
+                alpha = 0.70) +
+    geom_line(aes(group=1, color=Deriv_col)) +
+    geom_hline(yintercept = 0, size = 0.25, alpha = 0.5) +
+    ylab("Derivative of Time Trend of Energy Use (Trillion BTUs)") +
+    theme_bw()  +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_color_discrete("Trend", labels = c("Negative", "Positive", "None"))
+    
+```
+
+```{r}
+state_tot_arimas <- lapply(names(energyList), function(state){
+  
+  lapply(TETCB_vars, function(tot_var){
+    
+    fc <- forecast(auto.arima(ts(energyList[[state]][[tot_var]], start=1960, end=2009, 1)), h=41)
+    
+    a <- data.frame(state, tot_var, energyList[[state]][["Year"]], energyList[[state]][[tot_var]], NA, NA, NA, NA) %>%
+      `colnames<-` (c("StateCode", "Var", "Year", "Mean", "Lower80", "Lower95", "Upper80", "Upper95"))
+               
+    b <- data.frame(state, tot_var, Year=2010:2050, fc$mean, fc$lower, fc$upper) %>% 
+      `colnames<-` (c("StateCode", "Var", "Year", "Mean", "Lower80", "Lower95", "Upper80", "Upper95"))
+    
+    bind_rows(a, b)
+    
+  }) %>% 
+  bind_rows()
+}) %>% 
+  bind_rows()
+
+
+
+state_tot_arimas %>% 
+  ggplot(aes(x = Year, y = Mean)) +
+    facet_grid(StateCode ~ Var, scales = "free", labeller = labeller_func) +
+    geom_ribbon(aes(ymin = Lower95, ymax = Upper95), fill="darkorchid1", alpha = 0.25) +
+    geom_ribbon(aes(ymin = Lower80, ymax = Upper80), fill="darkorchid3", alpha = 0.25) +
+    geom_line() +
+    ylab("Energy Use (Trillion BTUs)") +
+    theme_bw()  +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+    
+```
+
+```{r}
+state_tot_arimas %>% 
+  filter(Var == "RETCB") %>% 
+  ggplot(aes(x = Year, y = Mean)) +
+    facet_grid(StateCode ~ ., scales = "free", labeller = labeller_func) +
+    geom_ribbon(aes(ymin = Lower95, ymax = Upper95), fill="darkorchid1", alpha = 0.25) +
+    geom_ribbon(aes(ymin = Lower80, ymax = Upper80), fill="darkorchid3", alpha = 0.25) +
+    geom_line() +
+    ggtitle("Renewable Energy Projections") +
+    ylab("Sustainable Energy Use (Trillion BTUs)") +
+    theme_bw()  +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank())
+```
+
+
+```{r}
+# For sensitivity analysis
+renew_accur <- lapply(names(energyList), function(state){
+  
+  accuracy(auto.arima(ts(energyList[[state]][["RETCB"]], start=1960, end=2009, 1)), h=41)
+  
+})
+renew_accur <- as.data.frame(do.call(rbind, renew_accur))
+rownames(renew_accur) <- names(energyList)
+renew_accur
+```
+
+
+```{r}
+state_renew_arimas <- lapply(names(energyList), function(state){
+  
+  lapply(RETCB_Vars, function(tot_var){
+    
+    fc <- forecast(auto.arima(ts(energyList[[state]][[tot_var]], start=1960, end=2009, 1)), h=41)
+    
+    a <- data.frame(state, tot_var, energyList[[state]][["Year"]], 
+                    energyList[[state]][[tot_var]], NA, NA, NA, NA) %>%
+      `colnames<-` (c("StateCode", "Var", "Year", "Mean", "Lower80", "Lower95", 
+                      "Upper80", "Upper95"))
+               
+    b <- data.frame(state, tot_var, Year=2010:2050, fc$mean, fc$lower, fc$upper) %>% 
+      `colnames<-` (c("StateCode", "Var", "Year", "Mean", "Lower80", "Lower95", 
+                      "Upper80", "Upper95"))
+    
+    bind_rows(a, b)
+    
+  }) %>% 
+  bind_rows()
+}) %>% 
+  bind_rows()
+
+state_renew_arimas %>% 
+  ggplot(aes(x = Year, y = Mean)) +
+    facet_grid(StateCode ~ Var, scales = "free", labeller = labeller_func) +
+    geom_ribbon(aes(ymin = Lower95, ymax = Upper95), fill="darkorchid1", alpha = 0.25) +
+    geom_ribbon(aes(ymin = Lower80, ymax = Upper80), fill="darkorchid3", alpha = 0.25) +
+    geom_line() +
+    ylab("Energy Use (Trillion BTUs)") +
+    theme_bw()  +
+    theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+
+```{r}
+cols <- c("#4D4D4D", "peru", "#A8272B", "#88C7E9","#8FAD49", "#0968A6")
+  ggplot() +
+    geom_bar(aes(x = StateCode, y = Mean, fill = Var), position = "dodge", stat = "identity", data = filter(state_tot_arimas, Year == 2009), alpha = 0.5) + 
+    geom_bar(aes(x = StateCode, y = Mean, fill = Var), position = "dodge", stat = "identity", data = filter(state_tot_arimas, Year == 2025), alpha = 0.3) +
+    geom_bar(aes(x = StateCode, y = Mean, fill = Var), position = "dodge", stat = "identity", data = filter(state_tot_arimas, Year == 2050), alpha = 0.2) +
+    
+    geom_errorbar(aes(x = StateCode, y = Mean, ymin = Mean, ymax = Mean, fill = Var), position = "dodge", stat = "identity", data = filter(state_tot_arimas, Year == 2009), size = .2, color = "black") +
+    
+    geom_errorbar(aes(x = StateCode, y = Mean, ymin = Mean, ymax = Mean, fill = Var), position = "dodge", stat = "identity", data = filter(state_tot_arimas, Year == 2025), size = .2, color = "red") +
+    
+    geom_errorbar(aes(x = StateCode, y = Mean, ymin = Mean, ymax = Mean, fill = Var), position = "dodge", stat = "identity", data = filter(state_tot_arimas, Year == 2050), size = .2, color = "gold") +
+    
+    scale_fill_manual("Energy Source", labels = c("Coal", "Natural Gas", "Petroleum",
+                                   "Nuclear", "Renewables", "Imported Electricity"),
+                      values = cols)
+  
+```
+
+```{r fig.width=10, fig.height=4}
+state_tot_plot <- state_tot_arimas %>%
+  mutate(Year = as.character(Year)) %>% 
+  filter(Year %in% c("2009", "2025", "2050"))
+
+cols <- c("#4D4D4D", "#0968A6", "#A8272B", "#88C7E9", "peru","#8FAD49")
+ggplot(state_tot_plot) +
+  facet_grid(. ~ StateCode, labeller = labeller_func) +
+  geom_bar(aes(x = Var, y = Mean, group = Year, fill = Var), color="black", size = .2, position = "dodge",
+           stat = "identity", show.legend = F) +
+  geom_errorbar(aes(x = Var, group = Year, y = Upper80, ymin = Upper80,
+ymax = Upper80), position = "dodge", stat = "identity", 
+                size = .5, data = filter(state_tot_plot, Var == "RETCB")) +
+  theme_bw() + 
+  ylab("Energy Use (Trillion BTUs)") +
+  theme(plot.title = element_text(hjust = 0.5), axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 30, hjust = 1)) +
+  scale_fill_manual("Energy Source", labels = tot_labs, values = cols)  +
+  scale_x_discrete(labels=tot_labs)
+    
+
+```
+
+
+```{r eval=F}
+state_tot_arimas %>% 
+  filter(Year == 2025) %>% 
+  filter(Var == "RETCB") %>% 
+  select(c(StateCode, Var, Upper80)) %>% 
+  dcast(Var ~ StateCode)
+
+state_tot_arimas %>% 
+  filter(Year == 2025) %>% 
+  filter(Var == "RETCB") %>% 
+  select(c(StateCode, Var, Upper80)) %>% 
+  bind_cols(RETCB_2009) %>% 
+  mutate(Above2009 = (Upper80 - RETCB)/RETCB*100)
+
+state_tot_arimas %>% 
+  filter(Year == 2050) %>% 
+  filter(Var == "RETCB") %>% 
+  select(c(StateCode, Var, Upper80)) %>% 
+  bind_cols(RETCB_2009) %>% 
+  mutate(Above2009 = (Upper80 - RETCB)/RETCB*100)
+
+
+RETCB_2009 <- energyCleaned %>% 
+  filter(Year == 2009) %>% 
+  select(RETCB) %>% 
+  as.vector()
+```
+
+
+
+
 
